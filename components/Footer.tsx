@@ -52,12 +52,8 @@ export default function Footer() {
           
           xhr.onload = () => {
             if (xhr.status === 200) {
-              if (xhr.responseStart > 0) {
-                setWebsitePing(Math.round(xhr.responseStart));
-              } else {
-                const totalTime = performance.now() - startTime;
-                setWebsitePing(Math.round(totalTime));
-              }
+              const totalTime = performance.now() - startTime;
+              setWebsitePing(Math.round(totalTime));
             } else {
               setWebsitePing(null);
             }
