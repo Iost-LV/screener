@@ -1,0 +1,58 @@
+.chartsContainer {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.chartSection {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.chartTitle {
+  font-size: 14px;
+  color: var(--accent, #ff8800);
+  font-weight: bold;
+  margin: 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-primary, #333);
+}
+
+.chart {
+  font-family: 'Courier New', 'Consolas', monospace;
+}
+
+.chartLabel {
+  fill: var(--text-secondary, #ccc);
+  font-size: 12px;
+  font-weight: normal;
+}
+
+.coinLabel {
+  fill: var(--accent, #ff8800);
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.chartValue {
+  fill: var(--text-tertiary, #888);
+  font-size: 11px;
+  font-weight: normal;
+}
+
+.barText {
+  fill: var(--bg-primary, #000);
+  font-size: 10px;
+  font-weight: bold;
+}
+
+.bar {
+  transition: width 0.3s ease;
+}
+
+.bar:hover {
+  opacity: 0.85;
+  filter: brightness(1.1);
+}
+

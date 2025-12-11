@@ -1,0 +1,84 @@
+.footer {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background-color: var(--bg-secondary, #1a1a1a);
+  border-top: 2px solid var(--border-primary, #333);
+  padding: 8px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  font-family: 'Courier New', 'Consolas', monospace;
+  color: var(--text-tertiary, #888);
+  z-index: 1000;
+}
+
+.footerLeft {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.footerRight {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fpsLabel,
+.pingLabel {
+  color: var(--text-tertiary, #888);
+}
+
+.fpsValue,
+.pingValue {
+  color: var(--accent, #ff8800);
+  font-weight: bold;
+  font-family: 'Courier New', 'Consolas', monospace;
+}
+
+.separator {
+  color: var(--border-secondary, #444);
+  margin: 0 4px;
+}
+
+.themeSelector {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.themeButton {
+  background-color: var(--bg-tertiary, #0f0f0f);
+  border: 1px solid var(--border-primary, #333);
+  color: var(--text-secondary, #ccc);
+  padding: 4px 8px;
+  font-family: 'Courier New', 'Consolas', monospace;
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 2px;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.themeButton:hover {
+  background-color: var(--bg-hover, #2a2a2a);
+  border-color: var(--accent, #ff8800);
+  color: var(--text-primary, #e0e0e0);
+}
+
+.themeButtonActive {
+  background-color: var(--accent, #ff8800);
+  border-color: var(--accent, #ff8800);
+  color: var(--bg-primary, #0a0a0a);
+  font-weight: bold;
+}
+
+.themeButtonActive:hover {
+  background-color: var(--accent-hover, #ff9900);
+  border-color: var(--accent-hover, #ff9900);
+}
+

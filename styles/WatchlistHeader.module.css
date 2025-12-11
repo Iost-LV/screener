@@ -1,0 +1,110 @@
+.watchlistContainer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 0;
+}
+
+.searchInput {
+  background-color: var(--bg-primary, #0a0a0a);
+  border: 1px solid var(--border-primary, #444);
+  color: var(--text-primary, #e0e0e0);
+  padding: 6px 12px;
+  font-family: 'Courier New', 'Consolas', monospace;
+  font-size: 12px;
+  border-radius: 2px;
+  outline: none;
+  width: 180px;
+  transition: all 0.2s;
+}
+
+.searchInput:focus {
+  border-color: var(--accent, #ff8800);
+  background-color: var(--bg-secondary, #1a1a1a);
+}
+
+.searchInput::placeholder {
+  color: var(--text-tertiary, #888);
+}
+
+.watchlistLabel {
+  color: var(--text-tertiary, #888);
+  font-size: 12px;
+  margin-right: 4px;
+}
+
+.watchlistTab {
+  background-color: var(--bg-primary, #0a0a0a);
+  border: 1px solid var(--border-primary, #444);
+  color: var(--text-secondary, #ccc);
+  padding: 6px 12px;
+  font-family: 'Courier New', 'Consolas', monospace;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+
+.watchlistTab:hover {
+  background-color: var(--bg-secondary, #1a1a1a);
+  border-color: var(--border-secondary, #555);
+}
+
+.watchlistTab.active {
+  background-color: var(--accent, #ff8800);
+  color: var(--bg-primary, #000);
+  border-color: var(--accent, #ff8800);
+  font-weight: bold;
+}
+
+.watchlistTabWrapper {
+  display: flex;
+  align-items: center;
+  position: relative;
+}
+
+.watchlistCount {
+  margin-left: 6px;
+  color: inherit;
+  opacity: 0.8;
+  font-size: 11px;
+}
+
+
+.watchlistAdd {
+  background-color: var(--bg-primary, #0a0a0a);
+  border: 1px solid var(--border-primary, #444);
+  color: var(--accent, #ff8800);
+  padding: 6px 10px;
+  font-family: 'Courier New', 'Consolas', monospace;
+  font-size: 14px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s;
+  border-radius: 2px;
+  line-height: 1;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.watchlistAdd:hover {
+  background-color: var(--bg-secondary, #1a1a1a);
+  border-color: var(--accent, #ff8800);
+}
+
+.watchlistEditInput {
+  background-color: var(--bg-primary, #0a0a0a);
+  border: 2px solid var(--accent, #ff8800);
+  color: var(--text-primary, #e0e0e0);
+  padding: 6px 12px;
+  font-family: 'Courier New', 'Consolas', monospace;
+  font-size: 12px;
+  width: 150px;
+  border-radius: 2px;
+  outline: none;
+}
+

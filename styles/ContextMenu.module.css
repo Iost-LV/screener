@@ -1,0 +1,85 @@
+.contextMenu {
+  position: fixed;
+  background-color: var(--bg-secondary, #1a1a1a);
+  border: 2px solid var(--accent, #ff8800);
+  border-radius: 4px;
+  padding: 8px 0;
+  z-index: 10000;
+  min-width: 220px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.8);
+  font-family: 'Courier New', 'Consolas', monospace;
+  font-size: 13px;
+}
+
+.contextMenuHeader {
+  padding: 8px 12px;
+  background-color: var(--bg-primary, #0a0a0a);
+  border-bottom: 1px solid var(--border-primary, #333);
+}
+
+.contextMenuTitle {
+  color: var(--accent, #ff8800);
+  font-weight: bold;
+  font-size: 14px;
+}
+
+.contextMenuDivider {
+  height: 1px;
+  background-color: var(--border-primary, #333);
+  margin: 4px 0;
+}
+
+.contextMenuSection {
+  padding: 4px 0;
+}
+
+.contextMenuLabel {
+  padding: 6px 12px;
+  color: var(--text-tertiary, #888);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.contextMenuItem {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 8px 12px;
+  background: none;
+  border: none;
+  color: var(--text-primary, #e0e0e0);
+  text-align: left;
+  cursor: pointer;
+  font-family: 'Courier New', 'Consolas', monospace;
+  font-size: 13px;
+  transition: background-color 0.15s;
+}
+
+.contextMenuItem:hover {
+  background-color: var(--bg-hover, #2a2a2a);
+}
+
+.contextMenuCheck {
+  margin-right: 8px;
+  color: var(--accent, #ff8800);
+  font-weight: bold;
+  width: 16px;
+  text-align: center;
+}
+
+.contextMenuCount {
+  margin-left: auto;
+  color: var(--text-tertiary, #888);
+  font-size: 11px;
+}
+
+.contextMenuDelete {
+  color: var(--negative-light, #ff6666) !important;
+}
+
+.contextMenuDelete:hover {
+  background-color: #3a0000 !important;
+  color: var(--negative-light, #ff8888) !important;
+}
+
