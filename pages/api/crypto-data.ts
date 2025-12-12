@@ -764,11 +764,12 @@ export default async function handler(
       
       // Wait for batch to complete - use allSettled to handle individual failures gracefully
       const batchResults = await Promise.allSettled(batchPromises);
-      const successfulResults = batchResults
-        .filter((result): result is PromiseFulfilledResult<CryptoData | null> => 
-          result.status === 'fulfilled' && result.value !== null
-        )
-        .map(result => result.value);
+      const successfulResults: CryptoData[] = batchResults
+        .filter((result) => result.status === 'fulfilled' && result.value !== null)
+        .map((result) => {
+          const fulfilledResult = result as PromiseFulfilledResult<CryptoData | null>;
+          return fulfilledResult.value as CryptoData;
+        });
       
       cryptoDataResults.push(...successfulResults);
       
