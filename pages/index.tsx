@@ -117,7 +117,10 @@ export default function Home() {
       setError(null);
       
       // Use cache-busting only on manual refresh
-      const cacheOption = resetSort ? { cache: 'no-store' } : { next: { revalidate: 60 } };
+      // For client-side fetch, use RequestInit-compatible options
+      const cacheOption: RequestInit = resetSort 
+        ? { cache: 'no-store' as RequestCache } 
+        : { cache: 'default' as RequestCache };
       
       // Add refresh parameter to bypass server-side cache on manual refresh
       const url = resetSort ? '/api/crypto-data?refresh=true' : '/api/crypto-data';
