@@ -109,10 +109,15 @@ export default function Home() {
   const { themeColors, theme } = useTheme();
 
 
-  const fetchData = async (resetSort: boolean = false) => {
+  const fetchData = useCallback(async (resetSort: boolean = false) => {
     try {
       setLoading(true);
-      const response = await fetch('/api/crypto-data');
+      setError(null);
+      
+      // Use cache-busting only on manual refresh
+      const cacheOption = resetSort ? { cache: 'no-store' } : { next: { revalidate: 60 } };
+      
+      const response = await fetch('/api/crypto-data', cacheOption);
       const result = await response.json();
       
       if (!response.ok) {
@@ -143,46 +148,63 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  // Handle WebSocket price updates
+  // Handle WebSocket price updates with throttling for better performance
+  const updateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingUpdatesRef = useRef<Map<string, { symbol: string; currentPrice?: number; volume?: number; priceChangePercent?: number }>>(new Map());
+
   const handlePriceUpdate = useCallback((updates: Map<string, { symbol: string; currentPrice?: number; volume?: number; priceChangePercent?: number }>) => {
-    setOriginalData((prevData) => {
-      const updated = prevData.map((coin) => {
-        const update = updates.get(coin.symbol);
-        if (update) {
-          // Only update fields that are provided (merge update with existing data)
-          return {
-            ...coin,
-            ...(update.currentPrice !== undefined && { currentPrice: update.currentPrice }),
-            ...(update.volume !== undefined && { volume: update.volume }),
-            // Note: Returns are based on historical data, so they'll be updated on next full refresh
-            // This is a trade-off to avoid making API calls for each price update
-          };
-        }
-        return coin;
-      });
-      return updated;
+    // Merge updates into pending updates
+    updates.forEach((update, symbol) => {
+      pendingUpdatesRef.current.set(symbol, update);
     });
 
-    // Update displayed data without resetting sort
-    setData((prevData) => {
-      const updated = prevData.map((coin) => {
-        const update = updates.get(coin.symbol);
-        if (update) {
-          // Only update fields that are provided (merge update with existing data)
-          return {
-            ...coin,
-            ...(update.currentPrice !== undefined && { currentPrice: update.currentPrice }),
-            ...(update.volume !== undefined && { volume: update.volume }),
-          };
-        }
-        return coin;
-      });
-      return updated;
-    });
+    // Throttle updates to batch them together (update every 100ms max)
+    if (updateTimeoutRef.current) {
+      return; // Update already scheduled
+    }
 
-    setLastUpdate(new Date());
+    updateTimeoutRef.current = setTimeout(() => {
+      const batchedUpdates = new Map(pendingUpdatesRef.current);
+      pendingUpdatesRef.current.clear();
+      updateTimeoutRef.current = null;
+
+      setOriginalData((prevData) => {
+        const updated = prevData.map((coin) => {
+          const update = batchedUpdates.get(coin.symbol);
+          if (update) {
+            // Only update fields that are provided (merge update with existing data)
+            return {
+              ...coin,
+              ...(update.currentPrice !== undefined && { currentPrice: update.currentPrice }),
+              ...(update.volume !== undefined && { volume: update.volume }),
+            };
+          }
+          return coin;
+        });
+        return updated;
+      });
+
+      // Update displayed data without resetting sort
+      setData((prevData) => {
+        const updated = prevData.map((coin) => {
+          const update = batchedUpdates.get(coin.symbol);
+          if (update) {
+            // Only update fields that are provided (merge update with existing data)
+            return {
+              ...coin,
+              ...(update.currentPrice !== undefined && { currentPrice: update.currentPrice }),
+              ...(update.volume !== undefined && { volume: update.volume }),
+            };
+          }
+          return coin;
+        });
+        return updated;
+      });
+
+      setLastUpdate(new Date());
+    }, 100); // Batch updates every 100ms
   }, []);
 
   // Get symbols for WebSocket subscription
@@ -204,45 +226,62 @@ export default function Home() {
     // This reduces API calls significantly while keeping historical metrics updated
     // Live price updates are handled via WebSocket to avoid rate limits
     const interval = setInterval(() => fetchData(false), 30 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, []);
+    return () => {
+      clearInterval(interval);
+      // Cleanup WebSocket update throttling
+      if (updateTimeoutRef.current) {
+        clearTimeout(updateTimeoutRef.current);
+        updateTimeoutRef.current = null;
+      }
+    };
+  }, [fetchData]);
 
 
-  // Filter data based on active watchlist and search query
-  useEffect(() => {
-    if (!watchlistsMounted || originalData.length === 0) return;
+  // Memoize filtered data to avoid recalculating on every render
+  const filteredData = useMemo(() => {
+    if (!watchlistsMounted || originalData.length === 0) return [];
 
-    let filteredData: CryptoData[];
+    let result: CryptoData[];
     if (activeWatchlistId === null) {
       // Show all coins
-      filteredData = [...originalData];
+      result = [...originalData];
     } else {
       // Filter by active watchlist
       const activeWatchlist = watchlists.find((w) => w.id === activeWatchlistId);
       if (activeWatchlist) {
-        filteredData = originalData.filter((coin) =>
-          activeWatchlist.coins.includes(coin.symbol)
+        // Use Set for O(1) lookup performance
+        const watchlistCoinsSet = new Set(activeWatchlist.coins);
+        result = originalData.filter((coin) =>
+          watchlistCoinsSet.has(coin.symbol)
         );
       } else {
-        filteredData = [...originalData];
+        result = [...originalData];
       }
     }
 
     // Apply search filter
     if (searchQuery.trim()) {
       const query = searchQuery.trim().toLowerCase();
-      filteredData = filteredData.filter((coin) =>
+      result = result.filter((coin) =>
         coin.symbol.toLowerCase().includes(query)
       );
     }
 
+    return result;
+  }, [activeWatchlistId, watchlists, originalData, watchlistsMounted, searchQuery]);
+
+  // Memoize sorted data
+  const sortedData = useMemo(() => {
+    if (filteredData.length === 0) return [];
+
     // Apply current sort state to filtered data
     if (sortState === 'default' || sortColumn === null) {
-      setData(filteredData);
-    } else {
-      // Re-apply sorting to filtered data
-      const sortMultiplier = sortState === 'highest' ? -1 : 1;
-      const sorted = [...filteredData].sort((a, b) => {
+      return filteredData;
+    }
+
+    // Re-apply sorting to filtered data
+    const sortMultiplier = sortState === 'highest' ? -1 : 1;
+    const sorted = [...filteredData].sort((a, b) => {
         if (sortColumn === 'symbol') {
           const aValue = a.symbol.toLowerCase();
           const bValue = b.symbol.toLowerCase();
@@ -317,15 +356,19 @@ export default function Home() {
 
         return (aValue - bValue) * sortMultiplier;
       });
-      setData(sorted);
-    }
-  }, [activeWatchlistId, watchlists, originalData, watchlistsMounted, sortColumn, sortState, searchQuery]);
+    return sorted;
+  }, [filteredData, sortColumn, sortState]);
 
-  const formatNumber = (num: number, decimals: number = 2): string => {
+  // Update displayed data when sorted data changes
+  useEffect(() => {
+    setData(sortedData);
+  }, [sortedData]);
+
+  const formatNumber = useCallback((num: number, decimals: number = 2): string => {
     return num.toFixed(decimals);
-  };
+  }, []);
 
-  const formatReturn = (returnValue: number): JSX.Element => {
+  const formatReturn = useCallback((returnValue: number): JSX.Element => {
     const sign = returnValue >= 0 ? '+' : '';
     const color = returnValue >= 0 ? themeColors.positive : themeColors.negative;
     return (
@@ -334,9 +377,9 @@ export default function Home() {
         {formatNumber(returnValue)}%
       </span>
     );
-  };
+  }, [themeColors.positive, themeColors.negative, formatNumber]);
 
-  const formatVWAPDistance = (distance: number): JSX.Element => {
+  const formatVWAPDistance = useCallback((distance: number): JSX.Element => {
     const sign = distance >= 0 ? '+' : '';
     const color = distance >= 0 ? themeColors.positive : themeColors.negative;
     return (
@@ -345,9 +388,9 @@ export default function Home() {
         {formatNumber(distance)}%
       </span>
     );
-  };
+  }, [themeColors.positive, themeColors.negative, formatNumber]);
 
-  const formatVolume = (volume: number): string => {
+  const formatVolume = useCallback((volume: number): string => {
     if (volume >= 1e9) {
       return `$${(volume / 1e9).toFixed(2)}B`;
     } else if (volume >= 1e6) {
@@ -356,9 +399,9 @@ export default function Home() {
       return `$${(volume / 1e3).toFixed(2)}K`;
     }
     return `$${formatNumber(volume)}`;
-  };
+  }, [formatNumber]);
 
-  const formatZScore = (zScore: number | undefined): JSX.Element => {
+  const formatZScore = useCallback((zScore: number | undefined): JSX.Element => {
     if (zScore === undefined || isNaN(zScore)) {
       return <span style={{ color: themeColors.textTertiary }}>N/A</span>;
     }
@@ -388,9 +431,9 @@ export default function Home() {
         {formatNumber(zScore, 2)}
       </span>
     );
-  };
+  }, [themeColors, formatNumber]);
 
-  const formatOIChange = (oiChange: number | undefined): JSX.Element => {
+  const formatOIChange = useCallback((oiChange: number | undefined): JSX.Element => {
     if (oiChange === undefined || isNaN(oiChange)) {
       return <span style={{ color: themeColors.textTertiary }}>N/A</span>;
     }
@@ -402,7 +445,7 @@ export default function Home() {
         {formatNumber(oiChange)}%
       </span>
     );
-  };
+  }, [themeColors, formatNumber]);
 
   const handleHeaderClick = (column: SortColumn) => {
     let newSortState: SortState;

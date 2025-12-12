@@ -68,21 +68,30 @@ export function useBinanceWebSocket(
           const tickers: BinanceTickerUpdate[] = JSON.parse(event.data);
           
           // Filter to only symbols we care about and create update map
+          // Use Set for O(1) lookup performance
           const updates = new Map<string, PriceUpdate>();
           const symbolsSet = new Set(symbolsRef.current.map(s => s.toLowerCase()));
           
+          // Optimize: only process tickers we care about
           for (const ticker of tickers) {
             const symbol = ticker.s;
             if (symbolsSet.has(symbol.toLowerCase())) {
-              updates.set(symbol, {
-                symbol,
-                currentPrice: parseFloat(ticker.c),
-                volume: parseFloat(ticker.q),
-                priceChangePercent: parseFloat(ticker.P),
-              });
+              const price = parseFloat(ticker.c);
+              const volume = parseFloat(ticker.q);
+              
+              // Only add if valid numbers
+              if (!isNaN(price) && !isNaN(volume)) {
+                updates.set(symbol, {
+                  symbol,
+                  currentPrice: price,
+                  volume: volume,
+                  priceChangePercent: parseFloat(ticker.P),
+                });
+              }
             }
           }
 
+          // Only call update if we have valid updates
           if (updates.size > 0) {
             onUpdateRef.current(updates);
           }

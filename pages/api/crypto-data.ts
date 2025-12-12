@@ -1,6 +1,15 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import axios from 'axios';
 
+// Simple in-memory cache with TTL
+interface CacheEntry {
+  data: CryptoData[];
+  timestamp: number;
+}
+
+const cache: Map<string, CacheEntry> = new Map();
+const CACHE_TTL = 2 * 60 * 1000; // 2 minutes cache
+
 interface BinanceTicker {
   symbol: string;
   lastPrice: string;
@@ -69,6 +78,20 @@ export default async function handler(
   res: NextApiResponse<CryptoData[] | { error: string }>
 ) {
   try {
+    // Check cache first
+    const cacheKey = 'crypto-data';
+    const cached = cache.get(cacheKey);
+    const now = Date.now();
+    
+    if (cached && (now - cached.timestamp) < CACHE_TTL) {
+      // Return cached data with appropriate headers
+      res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=120');
+      res.status(200).json(cached.data);
+      return;
+    }
+    
+    // Set cache headers for fresh data
+    res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=120');
     // Fetch exchange info to get only active/trading symbols
     // Note: This API is now called less frequently (every 10 minutes) since
     // live price updates are handled via WebSocket to avoid rate limits
@@ -165,100 +188,82 @@ export default async function handler(
       return null;
     };
 
-    // Fetch historical data for each pair with rate limiting
-    // Process in batches of 10 with 200ms delay between batches to avoid rate limits
-    const BATCH_SIZE = 10;
-    const BATCH_DELAY = 200; // 200ms delay between batches
-    const REQUEST_DELAY = 50; // 50ms delay between individual requests within a batch
+    // Fetch historical data for each pair with optimized parallel processing
+    // Process in larger batches with minimal delays for maximum throughput
+    const BATCH_SIZE = 25; // Increased from 10 to 25 for better parallelization
+    const BATCH_DELAY = 100; // Reduced from 200ms to 100ms
     
     const cryptoDataResults: (CryptoData | null)[] = [];
     
-    // Process batches sequentially to control rate limiting
+    // Process batches with controlled concurrency
     for (let i = 0; i < usdtPairs.length; i += BATCH_SIZE) {
       const batch = usdtPairs.slice(i, i + BATCH_SIZE);
       
-      const batchPromises = batch.map(async (ticker, batchIndex) => {
-        // Add delay between requests within batch
-        if (batchIndex > 0) {
-          await delay(REQUEST_DELAY);
-        }
-        
+      // Process all symbols in batch in parallel - fetch 1d and 4h klines in parallel for each symbol
+      const batchPromises = batch.map(async (ticker) => {
         try {
           const symbol = ticker.symbol;
-        const currentPrice = parseFloat(ticker.lastPrice);
-        const volume = parseFloat(ticker.quoteVolume);
+          const currentPrice = parseFloat(ticker.lastPrice);
+          const volume = parseFloat(ticker.quoteVolume);
 
-        // Validate current price
-        if (!currentPrice || currentPrice <= 0 || isNaN(currentPrice)) {
-          return null;
-        }
-
-        // Fetch 500 days of daily candles (for all VWAP calculations and 1D EMA)
-        // Using 500 days ensures accurate EMA200 calculation with sufficient historical data
-        let klinesResponse;
-        try {
-          klinesResponse = await retryWithBackoff(async () => {
-            return await axios.get<BinanceKline[]>(
-              `https://fapi.binance.com/fapi/v1/klines`,
-              {
-                params: {
-                  symbol: symbol,
-                  interval: '1d',
-                  limit: 500,
-                },
-                timeout: 10000,
-              }
-            );
-          });
-          
-          if (!klinesResponse) {
-            console.warn(`Failed to fetch klines for ${symbol} after retries, skipping...`);
+          // Validate current price
+          if (!currentPrice || currentPrice <= 0 || isNaN(currentPrice)) {
             return null;
           }
-        } catch (error: any) {
-          // If still rate limited after retries, skip this symbol and continue with others
-          if (error?.response?.status === 429) {
-            console.warn(`Rate limited while fetching klines for ${symbol}, skipping...`);
+
+          // Fetch 1d and 4h klines in parallel for each symbol (major optimization)
+          const [klinesResponse, klines4hResponse] = await Promise.allSettled([
+            retryWithBackoff(async () => {
+              return await axios.get<BinanceKline[]>(
+                `https://fapi.binance.com/fapi/v1/klines`,
+                {
+                  params: {
+                    symbol: symbol,
+                    interval: '1d',
+                    limit: 500,
+                  },
+                  timeout: 10000,
+                }
+              );
+            }),
+            retryWithBackoff(async () => {
+              return await axios.get<BinanceKline[]>(
+                `https://fapi.binance.com/fapi/v1/klines`,
+                {
+                  params: {
+                    symbol: symbol,
+                    interval: '4h',
+                    limit: 500,
+                  },
+                  timeout: 10000,
+                }
+              );
+            }),
+          ]);
+
+          // Handle 1d klines response
+          let klines: BinanceKline[] = [];
+          if (klinesResponse.status === 'fulfilled' && klinesResponse.value) {
+            klines = klinesResponse.value.data || [];
+          } else {
+            const error = klinesResponse.status === 'rejected' ? klinesResponse.reason : null;
+            if (error?.response?.status === 429) {
+              console.warn(`Rate limited while fetching klines for ${symbol}, skipping...`);
+            }
             return null;
           }
-          throw error;
-        }
 
-        const klines = klinesResponse.data;
-
-        // Fetch 4H candles for 4H EMA 200 (need 200 periods = ~33 days, fetch 500 to get accurate EMA)
-        // Wrap in try-catch to handle cases where 4H data might not be available
-        let klines4h: BinanceKline[] = [];
-        try {
-          const klines4hResponse = await retryWithBackoff(async () => {
-            return await axios.get<BinanceKline[]>(
-              `https://fapi.binance.com/fapi/v1/klines`,
-              {
-                params: {
-                  symbol: symbol,
-                  interval: '4h',
-                  limit: 500, // Fetch 500 candles to get accurate EMA200 calculation
-                },
-                timeout: 10000,
-              }
-            );
-          });
-          
-          if (klines4hResponse) {
-            klines4h = klines4hResponse.data || [];
+          // Handle 4h klines response
+          let klines4h: BinanceKline[] = [];
+          if (klines4hResponse.status === 'fulfilled' && klines4hResponse.value) {
+            klines4h = klines4hResponse.value.data || [];
           } else {
-            klines4h = [];
+            // 4h data is optional, continue without it
+            const error = klines4hResponse.status === 'rejected' ? klines4hResponse.reason : null;
+            if (error?.response?.status !== 429) {
+              console.warn(`Failed to fetch 4H klines for ${symbol}, continuing without 4H data...`);
+            }
           }
-        } catch (error: any) {
-          // If rate limited, skip 4H data for this symbol
-          if (error?.response?.status === 429) {
-            console.warn(`Rate limited while fetching 4H klines for ${symbol}, skipping 4H data...`);
-          } else {
-            // If 4H data fetch fails for other reasons, we'll use empty array and fall back to currentPrice
-            console.warn(`Failed to fetch 4H klines for ${symbol}:`, error);
-          }
-          klines4h = [];
-        }
 
         if (klines.length === 0) {
           return null;
@@ -459,41 +464,42 @@ export default async function handler(
           }
         }
 
-        // Fetch Open Interest data
+        // Fetch Open Interest data (non-blocking - fetch in parallel with other operations)
+        // OI data is optional, so we don't block the main data flow
         let oiChange24h: number | undefined = undefined;
         let oiChange7d: number | undefined = undefined;
 
+        // Fetch OI data with shorter timeout and less aggressive retries since it's optional
         try {
-          // Fetch current Open Interest
           let currentOIResponse: any = null;
           try {
-            currentOIResponse = await retryWithBackoff(async () => {
-              return await axios.get<BinanceOpenInterest>(
-                `https://fapi.binance.com/fapi/v1/openInterest`,
-                {
-                  params: { symbol },
-                  timeout: 5000,
-                }
-              );
-            });
+            currentOIResponse = await retryWithBackoff(
+              async () => {
+                return await axios.get<BinanceOpenInterest>(
+                  `https://fapi.binance.com/fapi/v1/openInterest`,
+                  {
+                    params: { symbol },
+                    timeout: 3000, // Reduced timeout since it's optional
+                  }
+                );
+              },
+              2, // Only 2 retries for optional data
+              500 // Shorter base delay
+            );
             
             if (!currentOIResponse) {
-              // Set OI values to undefined and continue to return statement at end
               oiChange24h = undefined;
               oiChange7d = undefined;
-              currentOIResponse = null; // Mark as failed
+              currentOIResponse = null;
             }
           } catch (error: any) {
-            // If rate limited, skip OI data for this symbol and continue with rest of processing
+            // Silently skip OI data if it fails - it's optional
             if (error?.response?.status === 429) {
-              console.warn(`Rate limited while fetching OI for ${symbol}, skipping OI data...`);
-              // Set OI values to undefined and continue to return statement at end
-              oiChange24h = undefined;
-              oiChange7d = undefined;
-              currentOIResponse = null; // Mark as failed
-            } else {
-              throw error;
+              // Don't log every rate limit for OI to reduce console noise
             }
+            oiChange24h = undefined;
+            oiChange7d = undefined;
+            currentOIResponse = null;
           }
           
           // Only process OI if we successfully fetched currentOI
@@ -688,13 +694,19 @@ export default async function handler(
         console.error(`Error fetching data for ${ticker.symbol}:`, error);
         return null;
       }
-    });
+      });
       
-      // Wait for batch to complete before processing next batch
-      const batchResults = await Promise.all(batchPromises);
-      cryptoDataResults.push(...batchResults);
+      // Wait for batch to complete - use allSettled to handle individual failures gracefully
+      const batchResults = await Promise.allSettled(batchPromises);
+      const successfulResults = batchResults
+        .filter((result): result is PromiseFulfilledResult<CryptoData | null> => 
+          result.status === 'fulfilled' && result.value !== null
+        )
+        .map(result => result.value);
       
-      // Add delay between batches (except for the last batch)
+      cryptoDataResults.push(...successfulResults);
+      
+      // Minimal delay between batches to avoid overwhelming the API
       if (i + BATCH_SIZE < usdtPairs.length) {
         await delay(BATCH_DELAY);
       }
@@ -712,6 +724,12 @@ export default async function handler(
       res.status(500).json({ error: 'No data available after processing. This may be due to API rate limits or data validation issues.' });
       return;
     }
+
+    // Update cache
+    cache.set(cacheKey, {
+      data: cryptoData,
+      timestamp: Date.now(),
+    });
 
     res.status(200).json(cryptoData);
   } catch (error: any) {
