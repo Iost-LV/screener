@@ -31,6 +31,9 @@ interface CryptoData {
   ema2001d: number;
   ema200Distance1d: number;
   zScore?: number;
+  zScoreMean?: number; // Mean of historical returns for z-score calculation
+  zScoreStdDev?: number; // Standard deviation of historical returns for z-score calculation
+  lastCandleClose?: number; // Last daily candle close for z-score calculation
   oiChange24h?: number;
   oiChange7d?: number;
 }
@@ -43,7 +46,6 @@ export default function Home() {
   const [originalData, setOriginalData] = useState<CryptoData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [sortColumn, setSortColumn] = useState<SortColumn>(null);
   const [sortState, setSortState] = useState<SortState>('default');
   const [hoveredTooltip, setHoveredTooltip] = useState<string | null>(null);
@@ -117,7 +119,10 @@ export default function Home() {
       // Use cache-busting only on manual refresh
       const cacheOption = resetSort ? { cache: 'no-store' } : { next: { revalidate: 60 } };
       
-      const response = await fetch('/api/crypto-data', cacheOption);
+      // Add refresh parameter to bypass server-side cache on manual refresh
+      const url = resetSort ? '/api/crypto-data?refresh=true' : '/api/crypto-data';
+      
+      const response = await fetch(url, cacheOption);
       const result = await response.json();
       
       if (!response.ok) {
@@ -135,7 +140,6 @@ export default function Home() {
       // Z-scores are now calculated in the API based on historical daily returns
       setOriginalData(result);
       setData(result);
-      setLastUpdate(new Date());
       setError(null);
       // Only reset sort on initial load or manual refresh
       if (resetSort) {
@@ -170,15 +174,57 @@ export default function Home() {
       pendingUpdatesRef.current.clear();
       updateTimeoutRef.current = null;
 
+      // Helper function to recalculate all metrics based on new price
+      const recalculateMetrics = (coin: CryptoData, newPrice: number): CryptoData => {
+        // Recalculate all VWAP distances
+        const vwapDistance7d = coin.vwap7d > 0 ? ((newPrice - coin.vwap7d) / coin.vwap7d) * 100 : coin.vwapDistance7d;
+        const vwapDistance30d = coin.vwap30d > 0 ? ((newPrice - coin.vwap30d) / coin.vwap30d) * 100 : coin.vwapDistance30d;
+        const vwapDistance90d = coin.vwap90d > 0 ? ((newPrice - coin.vwap90d) / coin.vwap90d) * 100 : coin.vwapDistance90d;
+        const vwapDistance365d = coin.vwap365d > 0 ? ((newPrice - coin.vwap365d) / coin.vwap365d) * 100 : coin.vwapDistance365d;
+
+        // Recalculate EMA distances (using current price)
+        const ema200Distance4h = coin.ema2004h > 0 ? ((newPrice - coin.ema2004h) / coin.ema2004h) * 100 : coin.ema200Distance4h;
+        const ema200Distance1d = coin.ema2001d > 0 ? ((newPrice - coin.ema2001d) / coin.ema2001d) * 100 : coin.ema200Distance1d;
+
+        // Recalculate z-score if we have the necessary data
+        let zScore = coin.zScore;
+        if (coin.zScoreMean !== undefined && coin.zScoreStdDev !== undefined && coin.lastCandleClose !== undefined && coin.zScoreStdDev > 0) {
+          // Calculate today's return using new price vs last candle's close
+          const todayReturn = coin.lastCandleClose > 0 ? ((newPrice - coin.lastCandleClose) / coin.lastCandleClose) * 100 : coin.dailyReturn;
+          // Calculate z-score: Z = (mean - today's return) / stdDev
+          if (!isNaN(todayReturn)) {
+            zScore = (coin.zScoreMean - todayReturn) / coin.zScoreStdDev;
+          }
+        }
+
+        return {
+          ...coin,
+          currentPrice: newPrice,
+          vwapDistance7d,
+          vwapDistance30d,
+          vwapDistance90d,
+          vwapDistance365d,
+          ema200Distance4h,
+          ema200Distance1d,
+          zScore,
+        };
+      };
+
       setOriginalData((prevData) => {
         const updated = prevData.map((coin) => {
           const update = batchedUpdates.get(coin.symbol);
           if (update) {
-            // Only update fields that are provided (merge update with existing data)
+            // Get the new price (use updated price if available, otherwise keep current)
+            const newPrice = update.currentPrice !== undefined ? update.currentPrice : coin.currentPrice;
+            
+            // Recalculate all metrics with new price
+            const recalculated = recalculateMetrics(coin, newPrice);
+            
+            // Merge with other updates (volume, dailyReturn)
             return {
-              ...coin,
-              ...(update.currentPrice !== undefined && { currentPrice: update.currentPrice }),
+              ...recalculated,
               ...(update.volume !== undefined && { volume: update.volume }),
+              ...(update.priceChangePercent !== undefined && { dailyReturn: update.priceChangePercent }),
             };
           }
           return coin;
@@ -188,22 +234,24 @@ export default function Home() {
 
       // Update displayed data without resetting sort
       setData((prevData) => {
-        const updated = prevData.map((coin) => {
+        return prevData.map((coin) => {
           const update = batchedUpdates.get(coin.symbol);
           if (update) {
-            // Only update fields that are provided (merge update with existing data)
+            const newPrice = update.currentPrice !== undefined ? update.currentPrice : coin.currentPrice;
+            
+            // Recalculate all metrics with new price
+            const recalculated = recalculateMetrics(coin, newPrice);
+            
+            // Merge with other updates (volume, dailyReturn)
             return {
-              ...coin,
-              ...(update.currentPrice !== undefined && { currentPrice: update.currentPrice }),
+              ...recalculated,
               ...(update.volume !== undefined && { volume: update.volume }),
+              ...(update.priceChangePercent !== undefined && { dailyReturn: update.priceChangePercent }),
             };
           }
           return coin;
         });
-        return updated;
       });
-
-      setLastUpdate(new Date());
     }, 100); // Batch updates every 100ms
   }, []);
 
@@ -222,12 +270,8 @@ export default function Home() {
     setMounted(true);
     // Initial data fetch with sort reset
     fetchData(true);
-    // Refresh historical data every 30 minutes (increased from 10 minutes to reduce API calls)
-    // This reduces API calls significantly while keeping historical metrics updated
-    // Live price updates are handled via WebSocket to avoid rate limits
-    const interval = setInterval(() => fetchData(false), 30 * 60 * 1000);
+    // No interval refresh needed - everything updates live via WebSocket
     return () => {
-      clearInterval(interval);
       // Cleanup WebSocket update throttling
       if (updateTimeoutRef.current) {
         clearTimeout(updateTimeoutRef.current);
@@ -363,6 +407,14 @@ export default function Home() {
   useEffect(() => {
     setData(sortedData);
   }, [sortedData]);
+
+  // Sync displayed data with originalData when it updates (for live price updates)
+  useEffect(() => {
+    // Only update if we're not currently sorting (to preserve sort state)
+    if (sortState === 'default' || sortColumn === null) {
+      setData(originalData);
+    }
+  }, [originalData, sortState, sortColumn]);
 
   const formatNumber = useCallback((num: number, decimals: number = 2): string => {
     return num.toFixed(decimals);
@@ -781,12 +833,6 @@ export default function Home() {
                 <div className={styles.japaneseSign}>lost</div>
               </div>
               <div className={styles.headerRight}>
-                <span className={styles.updateTime}>
-                  {mounted && lastUpdate ? `Last Update: ${lastUpdate.toLocaleTimeString()}` : 'Last Update: --:--:-- --'}
-                </span>
-                <button className={styles.refreshButton} onClick={() => fetchData(true)}>
-                  Refresh
-                </button>
                 {profilesMounted && (
                   <div className={styles.columnProfilesMenu}>
                     <div className={styles.profileSelector}>

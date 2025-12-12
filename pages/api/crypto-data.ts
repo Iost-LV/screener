@@ -15,7 +15,9 @@ interface BinanceTicker {
   lastPrice: string;
   volume: string;
   quoteVolume: string;
-  openInterest?: string; // Some tickers might include OI
+  priceChangePercent?: string; // 24h price change percentage (may be named differently in API)
+  priceChange?: string; // Alternative field name
+  [key: string]: any; // Allow additional properties from Binance API
 }
 
 interface BinanceExchangeInfo {
@@ -69,6 +71,9 @@ interface CryptoData {
   ema2001d: number;
   ema200Distance1d: number;
   zScore?: number;
+  zScoreMean?: number; // Mean of historical returns for z-score calculation
+  zScoreStdDev?: number; // Standard deviation of historical returns for z-score calculation
+  lastCandleClose?: number; // Last daily candle close for z-score calculation
   oiChange24h?: number;
   oiChange7d?: number;
 }
@@ -78,12 +83,15 @@ export default async function handler(
   res: NextApiResponse<CryptoData[] | { error: string }>
 ) {
   try {
-    // Check cache first
+    // Check if this is a manual refresh (bypass cache)
+    const isManualRefresh = req.query.refresh === 'true';
+    
+    // Check cache first (unless manual refresh)
     const cacheKey = 'crypto-data';
     const cached = cache.get(cacheKey);
     const now = Date.now();
     
-    if (cached && (now - cached.timestamp) < CACHE_TTL) {
+    if (!isManualRefresh && cached && (now - cached.timestamp) < CACHE_TTL) {
       // Return cached data with appropriate headers
       res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=120');
       res.status(200).json(cached.data);
@@ -155,11 +163,6 @@ export default async function handler(
       })
       .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
       .slice(0, 100);
-
-    const now = Date.now();
-    const oneDayAgo = now - 24 * 60 * 60 * 1000;
-    const oneWeekAgo = now - 7 * 24 * 60 * 60 * 1000;
-    const oneMonthAgo = now - 30 * 24 * 60 * 60 * 1000;
 
     // Helper function to add delay between requests (rate limiting)
     const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -253,6 +256,52 @@ export default async function handler(
             return null;
           }
 
+          // Calculate weekly and monthly returns using exact timestamps (rolling window)
+          // This matches Binance's methodology: price now vs price exactly 7/30 days ago
+          const now = Date.now();
+          const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
+          const thirtyDaysAgo = now - (30 * 24 * 60 * 60 * 1000);
+          
+          // Find the closest kline to 7 days ago and 30 days ago
+          let price7dAgo: number | null = null;
+          let price30dAgo: number | null = null;
+          let closest7dDiff = Infinity;
+          let closest30dDiff = Infinity;
+          
+          for (const kline of klines) {
+            const klineTime = kline[0] as number; // Open time
+            const klineClose = parseFloat(kline[4] as string);
+            
+            if (isNaN(klineClose) || klineClose <= 0) continue;
+            
+            // Find kline closest to 7 days ago
+            const diff7d = Math.abs(klineTime - sevenDaysAgo);
+            if (diff7d < closest7dDiff) {
+              closest7dDiff = diff7d;
+              price7dAgo = klineClose;
+            }
+            
+            // Find kline closest to 30 days ago
+            const diff30d = Math.abs(klineTime - thirtyDaysAgo);
+            if (diff30d < closest30dDiff) {
+              closest30dDiff = diff30d;
+              price30dAgo = klineClose;
+            }
+          }
+          
+          // Fallback: if we didn't find reasonable matches, use candle-based calculation
+          // (within 2 days tolerance for 7d, within 5 days for 30d)
+          if (!price7dAgo || closest7dDiff > 2 * 24 * 60 * 60 * 1000) {
+            if (klines.length >= 7) {
+              price7dAgo = parseFloat(klines[klines.length - 7][4] as string);
+            }
+          }
+          if (!price30dAgo || closest30dDiff > 5 * 24 * 60 * 60 * 1000) {
+            if (klines.length >= 30) {
+              price30dAgo = parseFloat(klines[klines.length - 30][4] as string);
+            }
+          }
+
           // Handle 4h klines response
           let klines4h: BinanceKline[] = [];
           if (klines4hResponse.status === 'fulfilled' && klines4hResponse.value) {
@@ -286,33 +335,40 @@ export default async function handler(
         });
 
         // Calculate returns - rolling period returns
-        // Daily return: (current price - yesterday's close) / yesterday's close
+        // Daily return: Use Binance's official 24h price change percentage from ticker API
         // Weekly return: (current price - 7 days ago close) / 7 days ago close  
         // Monthly return: (current price - 30 days ago close) / 30 days ago close
         // 
         // Note: Using CLOSE prices (index 4) from historical candles
         // This calculates: "What's the return from X days ago to right now?"
         
-        const dailyReturn =
-          klines.length >= 2
-            ? ((currentPrice - parseFloat(klines[klines.length - 2][4])) /
-                parseFloat(klines[klines.length - 2][4])) *
-              100
-            : 0;
+        // Use Binance's official 24h price change percentage from ticker API
+        // Try multiple possible field names (Binance API may use different naming)
+        // Fallback to manual calculation if not available
+        let dailyReturn = 0;
+        const priceChangePercent = ticker.priceChangePercent || ticker.priceChange || (ticker as any).P;
+        if (priceChangePercent !== undefined && priceChangePercent !== null && priceChangePercent !== '') {
+          const parsed = parseFloat(priceChangePercent);
+          if (!isNaN(parsed)) {
+            dailyReturn = parsed;
+          }
+        }
+        
+        // Fallback: calculate from yesterday's close if ticker field not available or invalid
+        if (dailyReturn === 0 && klines.length >= 2) {
+          dailyReturn = ((currentPrice - parseFloat(klines[klines.length - 2][4])) /
+            parseFloat(klines[klines.length - 2][4])) * 100;
+        }
 
-        const weeklyReturn =
-          klines.length >= 8
-            ? ((currentPrice - parseFloat(klines[klines.length - 8][4])) /
-                parseFloat(klines[klines.length - 8][4])) *
-              100
-            : 0;
+        // Calculate weekly return using price from exactly 7 days ago (rolling window)
+        const weeklyReturn = price7dAgo && price7dAgo > 0
+          ? ((currentPrice - price7dAgo) / price7dAgo) * 100
+          : 0;
 
-        const monthlyReturn =
-          klines.length >= 30
-            ? ((currentPrice - parseFloat(klines[klines.length - 30][4])) /
-                parseFloat(klines[klines.length - 30][4])) *
-              100
-            : 0;
+        // Calculate monthly return using price from exactly 30 days ago (rolling window)
+        const monthlyReturn = price30dAgo && price30dAgo > 0
+          ? ((currentPrice - price30dAgo) / price30dAgo) * 100
+          : 0;
 
         // Helper function to calculate VWAP for a specific period
         // VWAP = Sum(Typical Price * Volume) / Sum(Volume)
@@ -423,6 +479,9 @@ export default async function handler(
         // Calculate z-score based on historical daily returns (last 30 days)
         // Z = (current return - mean of historical returns) / standard deviation of historical returns
         let zScore: number | undefined = undefined;
+        let zScoreMean: number | undefined = undefined;
+        let zScoreStdDev: number | undefined = undefined;
+        let lastCandleClose: number | undefined = undefined;
         if (klines.length >= 31) {
           // Calculate daily returns for the last 30 days from historical candles
           // Daily return = (close[today] - close[yesterday]) / close[yesterday] * 100
@@ -451,8 +510,12 @@ export default async function handler(
             const variance = historicalReturns.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / historicalReturns.length;
             const stdDev = Math.sqrt(variance);
             
+            // Store mean and stdDev for client-side recalculation
+            zScoreMean = mean;
+            zScoreStdDev = stdDev;
+            
             // Calculate today's return using currentPrice vs last candle's close
-            const lastCandleClose = parseFloat(klines[klines.length - 1][4] as string);
+            lastCandleClose = parseFloat(klines[klines.length - 1][4] as string);
             const todayReturn = lastCandleClose > 0 ? ((currentPrice - lastCandleClose) / lastCandleClose) * 100 : dailyReturn;
             
             // Calculate z-score: Z = (mean - today's return) / stdDev
@@ -687,6 +750,9 @@ export default async function handler(
           ema2001d,
           ema200Distance1d,
           zScore,
+          zScoreMean,
+          zScoreStdDev,
+          lastCandleClose,
           oiChange24h,
           oiChange7d,
         };
